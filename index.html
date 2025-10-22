@@ -247,6 +247,7 @@
 
         let isHostUser = false;
         let sharedImage = new Image();
+        let sharedImageReady = false; // 추가: 프레임 로드 완료 플래그
         let hostStreamInterval = null;
         const streamCanvas = document.createElement('canvas');
         const streamCtx = streamCanvas.getContext('2d');
@@ -476,6 +477,18 @@
             frameRef.on('value', snap => {
                 const val = snap.val();
                 if (val && val.data) {
+                    console.log('[frame] received ts=', val.timestamp || '');
+                    // 새 프레임 수신 시 로드 플래그 리셋 후 src 설정
+                    sharedImageReady = false;
+                    sharedImage.onload = () => {
+                        sharedImageReady = true;
+                        // 첫 프레임이 도착하면 로딩 숨김
+                        if (loading && !loading.classList.contains('hidden')) loading.classList.add('hidden');
+                    };
+                    sharedImage.onerror = (err) => {
+                        sharedImageReady = false;
+                        console.warn('[frame] image load error', err);
+                    };
                     sharedImage.src = val.data;
                 }
             });
@@ -559,12 +572,12 @@
         function redrawTiles() {
             // 배경: 호스트면 비디오, 아니면 sharedImage
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+ 
             if (isHostUser && cameraReady) {
                 try {
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                 } catch (e) { /* 무시 */ }
-            } else if (sharedImage && sharedImage.complete && sharedImage.naturalWidth) {
+            } else if (sharedImage && sharedImageReady) {
                 try {
                     ctx.drawImage(sharedImage, 0, 0, canvas.width, canvas.height);
                 } catch (e) { /* 무시 */ }
