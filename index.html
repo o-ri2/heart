@@ -236,28 +236,30 @@
 
         // Firebase 설정
         const firebaseConfig = {
-    apiKey: "AIzaSyBdgZvvs4ziCkk68ooj0adUhq_f0uBg4fs",
-    authDomain: "paintingg-b6b90.firebaseapp.com",
-    databaseURL: "https://paintingg-b6b90-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "paintingg-b6b90",
-    storageBucket: "paintingg-b6b90.appspot.com",
-    messagingSenderId: "2167016545",
-    appId: "1:2167016545:web:5665b22c3e1bfd9401ee20"
-};
+            apiKey: "AIzaSyBdgZvvs4ziCkk68ooj0adUhq_f0uBg4fs",
+            authDomain: "paintingg-b6b90.firebaseapp.com",
+            databaseURL: "https://paintingg-b6b90-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "paintingg-b6b90",
+            storageBucket: "paintingg-b6b90.appspot.com",
+            messagingSenderId: "2167016545",
+            appId: "1:2167016545:web:5665b22c3e1bfd9401ee20"
+        };
+
+        let isHostUser = false;
+        let sharedImage = new Image();
+        let hostStreamInterval = null;
+        const streamCanvas = document.createElement('canvas');
+        const streamCtx = streamCanvas.getContext('2d');
 
         // Firebase 초기화 시도
         async function tryInitFirebase() {
             try {
-                // 기존 앱이 있으면 제거
                 if (firebase.apps.length) {
                     await Promise.all(firebase.apps.map(app => app.delete()));
                 }
-
-                // Firebase 초기화
                 firebase.initializeApp(firebaseConfig);
                 db = firebase.database();
-                
-                // 연결 상태 확인
+
                 const connectedRef = db.ref('.info/connected');
                 connectedRef.on('value', (snap) => {
                     if (snap.val() === true) {
@@ -265,7 +267,7 @@
                         isOnline = true;
                         document.getElementById('status').textContent = '🟢 온라인';
                         document.getElementById('status').classList.remove('offline');
-                        setupFirebase(); // 연결 성공시 Firebase 설정 실행
+                        setupFirebase();
                     }
                 });
 
@@ -299,7 +301,7 @@
         const counter = document.getElementById('counter');
         const users = document.getElementById('users');
         const loading = document.getElementById('loading');
-        
+
         let tiles = [];
         let tileSize = 40;
         let cols, rows;
@@ -317,35 +319,63 @@
             if (cameraReady) redrawTiles();
         }
 
-        // 카메라 초기화
+        // 카메라 초기화 (호스트만 호출)
         async function initCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { 
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
                         facingMode: 'environment',
-                        width: { ideal: 1920 },
-                        height: { ideal: 1080 }
-                    } 
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
                 });
-                
                 video.srcObject = stream;
                 video.addEventListener('loadedmetadata', () => {
                     cameraReady = true;
                     loading.classList.add('hidden');
+
+                    // 스트리밍 캔버스 사이즈 설정
+                    streamCanvas.width = video.videoWidth || canvas.width;
+                    streamCanvas.height = video.videoHeight || canvas.height;
                 });
             } catch (err) {
                 console.error('카메라 오류:', err);
-                alert('카메라 접근이 필요합니다.');
+                alert('카메라 접근이 필요합니다 (호스트 전용).');
                 loading.querySelector('p').textContent = '카메라 권한이 필요합니다';
             }
         }
 
-        // Firebase 설정
+        // 호스트가 있을 때 프레임 업로드 시작
+        function startHostStream() {
+            if (hostStreamInterval || !cameraReady || !db) return;
+            const frameRef = db.ref('stream/frame');
+            hostStreamInterval = setInterval(() => {
+                try {
+                    // 캔버스에 비디오를 그려서 base64로 업로드
+                    streamCtx.drawImage(video, 0, 0, streamCanvas.width, streamCanvas.height);
+                    const dataUrl = streamCanvas.toDataURL('image/jpeg', 0.6);
+                    frameRef.set({ data: dataUrl, timestamp: Date.now() });
+                } catch (e) {
+                    console.warn('프레임 캡쳐 실패:', e);
+                }
+            }, 700); // 약 700ms 간격 (조절 가능)
+        }
+
+        function stopHostStream() {
+            if (hostStreamInterval) {
+                clearInterval(hostStreamInterval);
+                hostStreamInterval = null;
+            }
+        }
+
+        // Firebase 설정 (호스트 선출 + 스트림 수신)
         function setupFirebase() {
-            if (!isOnline || !db) return;
+            if (!db) return;
 
             const tilesRef = db.ref('tiles');
             const usersRef = db.ref('users');
+            const hostRef = db.ref('host');
+            const frameRef = db.ref('stream/frame');
 
             tilesRef.on('value', (snapshot) => {
                 const data = snapshot.val();
@@ -368,10 +398,57 @@
                 users.textContent = `👥 ${count}명 접속`;
             });
 
+            // 사용자 등록 및 호스트 선출(첫 접속자가 호스트)
             const userRef = usersRef.child(userId);
             userRef.set({ timestamp: Date.now() });
             userRef.onDisconnect().remove();
 
+            // 트랜잭션으로 host가 비어있으면 claim
+            hostRef.transaction(current => {
+                return current || userId;
+            }).then(result => {
+                const committed = result.committed;
+                const newHost = result.snapshot.val();
+                // 만약 내가 호스트가 되었다면 onDisconnect로 host 제거 설정
+                if (newHost === userId) {
+                    isHostUser = true;
+                    hostRef.onDisconnect().set(null);
+                    // 카메라 초기화 및 스트리밍 시작
+                    initCamera().then(() => {
+                        if (cameraReady) startHostStream();
+                    }).catch(() => {
+                        console.warn('호스트 카메라 초기화 실패');
+                    });
+                }
+            }).catch(err => {
+                console.warn('host transaction error', err);
+            });
+
+            // 호스트 변경 감지: 다른 사람이 호스트가 되면 스트리밍 중지/시작 처리
+            hostRef.on('value', snap => {
+                const hostId = snap.val();
+                const prev = isHostUser;
+                isHostUser = (hostId === userId);
+                if (isHostUser) {
+                    document.getElementById('status').textContent = '🟢 온라인 (호스트)';
+                    // 이미 initCamera가 호출됐을 수 있음 — 없으면 호출
+                    if (!cameraReady) initCamera().then(() => { if (cameraReady) startHostStream(); });
+                    else startHostStream();
+                } else {
+                    document.getElementById('status').textContent = '🟢 온라인 (참여자)';
+                    stopHostStream();
+                }
+            });
+
+            // 프레임 수신: 비-host는 이 데이터를 이미지로 받아서 배경으로 사용
+            frameRef.on('value', snap => {
+                const val = snap.val();
+                if (val && val.data) {
+                    sharedImage.src = val.data;
+                }
+            });
+
+            // 주기적으로 user 타임스탬프 갱신
             setInterval(() => {
                 userRef.set({ timestamp: Date.now() });
             }, 30000);
@@ -399,8 +476,8 @@
         }
 
         function addTile() {
-            if (!cameraReady) {
-                alert('카메라가 준비되지 않았습니다.');
+            if (!cameraReady && !sharedImage.src) {
+                alert('화면(호스트 스트림)이 준비되지 않았습니다.');
                 return;
             }
             if (availablePositions.length === 0) {
@@ -448,7 +525,24 @@
         }
 
         function redrawTiles() {
+            // 배경: 호스트면 비디오, 아니면 sharedImage
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (isHostUser && cameraReady) {
+                try {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                } catch (e) { /* 무시 */ }
+            } else if (sharedImage && sharedImage.complete && sharedImage.naturalWidth) {
+                try {
+                    ctx.drawImage(sharedImage, 0, 0, canvas.width, canvas.height);
+                } catch (e) { /* 무시 */ }
+            } else {
+                // 검은 배경 표시
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // 타일 렌더링 (위에 오버레이)
             tiles.forEach(tile => {
                 ctx.save();
                 const centerX = tile.x + tile.size / 2;
@@ -471,7 +565,7 @@
         }
 
         function renderLoop() {
-            if (cameraReady) redrawTiles();
+            redrawTiles();
             requestAnimationFrame(renderLoop);
         }
 
@@ -497,10 +591,9 @@
         });
 
         window.addEventListener('resize', resizeCanvas);
-        
+
         // 초기화
         resizeCanvas();
-        initCamera();
         renderLoop();
         findCorrectURL();
     </script>
