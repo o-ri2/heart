@@ -403,40 +403,64 @@
             userRef.set({ timestamp: Date.now() });
             userRef.onDisconnect().remove();
 
-            // 트랜잭션으로 host가 비어있으면 claim
+            // --- 호스트 선출 로직 (교체) ---
+            // host 노드를 객체로 관리: { owner: userId, ts: timestamp }
             hostRef.transaction(current => {
-                return current || userId;
+                if (!current || !current.owner) {
+                    // 아무 호스트도 없으면 내가 호스트가 됨
+                    return { owner: userId, ts: Date.now() };
+                }
+                // 이미 호스트가 있으면 변경하지 않음
+                return; 
             }).then(result => {
-                const committed = result.committed;
-                const newHost = result.snapshot.val();
-                // 만약 내가 호스트가 되었다면 onDisconnect로 host 제거 설정
-                if (newHost === userId) {
-                    isHostUser = true;
-                    hostRef.onDisconnect().set(null);
-                    // 카메라 초기화 및 스트리밍 시작
-                    initCamera().then(() => {
-                        if (cameraReady) startHostStream();
-                    }).catch(() => {
-                        console.warn('호스트 카메라 초기화 실패');
-                    });
+                // transaction이 커밋되어 내가 호스트가 된 경우만 카메라 초기화
+                if (result.committed) {
+                    const val = result.snapshot.val();
+                    if (val && val.owner === userId) {
+                        isHostUser = true;
+                        // 호스트 퇴장 시 호스트 필드 정리
+                        hostRef.onDisconnect().set(null).catch(()=>{});
+                        // 이제 안전하게 카메라 초기화(호스트만)
+                        initCamera().then(() => {
+                            if (cameraReady) startHostStream();
+                        }).catch(err => {
+                            console.warn('호스트 카메라 초기화 실패', err);
+                        });
+                    }
+                } else {
+                    // transaction이 커밋되지 않았으면 현재 호스트를 확인해서 상태 업데이트
+                    const currentHost = result.snapshot.val() ? result.snapshot.val().owner : null;
+                    isHostUser = (currentHost === userId);
                 }
             }).catch(err => {
                 console.warn('host transaction error', err);
             });
 
-            // 호스트 변경 감지: 다른 사람이 호스트가 되면 스트리밍 중지/시작 처리
+            // 호스트 변경 감지: 누군가 호스트가 되거나 빠지면 구독으로 처리
             hostRef.on('value', snap => {
-                const hostId = snap.val();
-                const prev = isHostUser;
+                const hostNode = snap.val();
+                const hostId = hostNode ? hostNode.owner : null;
+                const prevIsHost = isHostUser;
                 isHostUser = (hostId === userId);
-                if (isHostUser) {
+
+                if (isHostUser && !prevIsHost) {
                     document.getElementById('status').textContent = '🟢 온라인 (호스트)';
-                    // 이미 initCamera가 호출됐을 수 있음 — 없으면 호출
-                    if (!cameraReady) initCamera().then(() => { if (cameraReady) startHostStream(); });
-                    else startHostStream();
+                    // 이제 안전하게 카메라/스트림 시작
+                    if (!cameraReady) {
+                        initCamera().then(() => { if (cameraReady) startHostStream(); });
+                    } else {
+                        startHostStream();
+                    }
+                } else if (!isHostUser && prevIsHost) {
+                    // 내가 호스트였다가 아니게 된 경우 스트리밍 중지
+                    stopHostStream();
+                    document.getElementById('status').textContent = '🟢 온라인 (참여자)';
+                } else if (!hostId) {
+                    // 호스트가 없을 때는 참여자 상태
+                    document.getElementById('status').textContent = '🟡 호스트 없음 (대기중)';
+                    stopHostStream();
                 } else {
                     document.getElementById('status').textContent = '🟢 온라인 (참여자)';
-                    stopHostStream();
                 }
             });
 
