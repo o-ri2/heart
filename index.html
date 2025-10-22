@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>모자이크 - 자동 리전 감지</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #000;
+        }
+
+        #video {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            min-width: 100%;
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: cover;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+        }
+
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #button {
+            pointer-events: auto;
+            padding: 20px 40px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            border: none;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 500;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            -webkit-tap-highlight-color: transparent;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        #button:hover {
+            transform: scale(1.05);
+            background: rgba(0, 0, 0, 0.9);
+        }
+
+        #button:active {
+            transform: scale(0.95);
+        }
+
+        #counter {
+            position: absolute;
+            top: 30px;
+            right: 30px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #fff;
+            letter-spacing: 0.5px;
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 20px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        #users {
+            position: absolute;
+            top: 80px;
+            right: 30px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.8);
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 15px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        #loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            z-index: 1000;
+            transition: opacity 0.5s ease;
+        }
+
+        #loading.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        #clear-button {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: auto;
+            padding: 15px 30px;
+            background: rgba(255, 59, 48, 0.8);
+            color: #fff;
+            border: none;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #clear-button:hover {
+            background: rgba(255, 59, 48, 0.9);
+        }
+
+        #clear-button:active {
+            transform: translateX(-50%) scale(0.95);
+        }
+
+        .info-text {
+            margin-top: 10px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            padding: 0 20px;
+        }
+
+        #status {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            font-size: 12px;
+            color: #4CAF50;
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 15px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        #status.offline {
+            color: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <!-- 로딩 화면 -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>리전 자동 감지 중...</p>
+        <p class="info-text">여러 명이 동시에 참여할 수 있습니다!</p>
+    </div>
+
+    <!-- 비디오 (카메라) -->
+    <video id="video" autoplay playsinline muted></video>
+
+    <!-- 캔버스 (모자이크) -->
+    <canvas id="canvas"></canvas>
+
+    <!-- UI -->
+    <div id="ui">
+        <div id="status">🔄 연결 중...</div>
+        <div id="users">👥 1명 접속</div>
+        <div id="counter">0</div>
+        <button id="button">관심</button>
+        <button id="clear-button">전체 초기화</button>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+    <script>
+        console.log('🚀 시작...');
+
+        let db = null;
+        let isOnline = false;
+        let currentURLIndex = 0;
+
+        // Firebase 설정
+        const firebaseConfig = {
+    apiKey: "AIzaSyBdgZvvs4ziCkk68ooj0adUhq_f0uBg4fs",
+    authDomain: "paintingg-b6b90.firebaseapp.com",
+    databaseURL: "https://paintingg-b6b90-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "paintingg-b6b90",
+    storageBucket: "paintingg-b6b90.appspot.com",
+    messagingSenderId: "2167016545",
+    appId: "1:2167016545:web:5665b22c3e1bfd9401ee20"
+};
+
+        // Firebase 초기화 시도
+        async function tryInitFirebase() {
+            try {
+                // 기존 앱이 있으면 제거
+                if (firebase.apps.length) {
+                    await Promise.all(firebase.apps.map(app => app.delete()));
+                }
+
+                // Firebase 초기화
+                firebase.initializeApp(firebaseConfig);
+                db = firebase.database();
+                
+                // 연결 상태 확인
+                const connectedRef = db.ref('.info/connected');
+                connectedRef.on('value', (snap) => {
+                    if (snap.val() === true) {
+                        console.log('Firebase 연결 성공!');
+                        isOnline = true;
+                        document.getElementById('status').textContent = '🟢 온라인';
+                        document.getElementById('status').classList.remove('offline');
+                        setupFirebase(); // 연결 성공시 Firebase 설정 실행
+                    }
+                });
+
+                return true;
+            } catch (error) {
+                console.error('Firebase 초기화 에러:', error);
+                return false;
+            }
+        }
+
+        // 모든 URL 시도
+        async function findCorrectURL() {
+            try {
+                const success = await tryInitFirebase();
+                if (!success) {
+                    throw new Error('Firebase 초기화 실패');
+                }
+            } catch (error) {
+                console.error('Firebase 연결 실패:', error);
+                document.getElementById('status').textContent = '🔴 오프라인';
+                document.getElementById('status').classList.add('offline');
+                alert('Firebase 연결 실패\n로컬 모드로 작동합니다');
+            }
+        }
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const button = document.getElementById('button');
+        const clearButton = document.getElementById('clear-button');
+        const counter = document.getElementById('counter');
+        const users = document.getElementById('users');
+        const loading = document.getElementById('loading');
+        
+        let tiles = [];
+        let tileSize = 40;
+        let cols, rows;
+        let availablePositions = [];
+        let cameraReady = false;
+        let userId = 'user_' + Math.random().toString(36).substr(2, 9);
+
+        // 캔버스 크기 설정
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            cols = Math.ceil(canvas.width / tileSize);
+            rows = Math.ceil(canvas.height / tileSize);
+            initializePositions();
+            if (cameraReady) redrawTiles();
+        }
+
+        // 카메라 초기화
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    } 
+                });
+                
+                video.srcObject = stream;
+                video.addEventListener('loadedmetadata', () => {
+                    cameraReady = true;
+                    loading.classList.add('hidden');
+                });
+            } catch (err) {
+                console.error('카메라 오류:', err);
+                alert('카메라 접근이 필요합니다.');
+                loading.querySelector('p').textContent = '카메라 권한이 필요합니다';
+            }
+        }
+
+        // Firebase 설정
+        function setupFirebase() {
+            if (!isOnline || !db) return;
+
+            const tilesRef = db.ref('tiles');
+            const usersRef = db.ref('users');
+
+            tilesRef.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    tiles = Object.values(data).map(tile => ({
+                        ...tile,
+                        alpha: tile.targetAlpha || 0.8,
+                        scale: 1
+                    }));
+                } else {
+                    tiles = [];
+                }
+                counter.textContent = tiles.length;
+                initializePositions();
+                redrawTiles();
+            });
+
+            usersRef.on('value', (snapshot) => {
+                const count = snapshot.numChildren();
+                users.textContent = `👥 ${count}명 접속`;
+            });
+
+            const userRef = usersRef.child(userId);
+            userRef.set({ timestamp: Date.now() });
+            userRef.onDisconnect().remove();
+
+            setInterval(() => {
+                userRef.set({ timestamp: Date.now() });
+            }, 30000);
+        }
+
+        function initializePositions() {
+            availablePositions = [];
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    availablePositions.push({ x, y });
+                }
+            }
+            tiles.forEach(tile => {
+                const index = availablePositions.findIndex(
+                    pos => pos.x === tile.gridX && pos.y === tile.gridY
+                );
+                if (index !== -1) availablePositions.splice(index, 1);
+            });
+        }
+
+        function getRandomColor() {
+            const colors = ['#000000', '#FFFFFF', '#808080', '#D3D3D3', '#A9A9A9',
+                           '#696969', '#2C2C2C', '#F5F5F5', '#DCDCDC', '#C0C0C0'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        function addTile() {
+            if (!cameraReady) {
+                alert('카메라가 준비되지 않았습니다.');
+                return;
+            }
+            if (availablePositions.length === 0) {
+                alert('화면이 모두 채워졌습니다!');
+                return;
+            }
+
+            const randomIndex = Math.floor(Math.random() * availablePositions.length);
+            const position = availablePositions[randomIndex];
+
+            const tile = {
+                gridX: position.x,
+                gridY: position.y,
+                x: position.x * tileSize,
+                y: position.y * tileSize,
+                size: tileSize,
+                color: getRandomColor(),
+                targetAlpha: 0.8,
+                userId: userId,
+                timestamp: Date.now()
+            };
+
+            if (isOnline && db) {
+                const tileId = 'tile_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                db.ref('tiles/' + tileId).set(tile);
+            } else {
+                tile.alpha = 0;
+                tile.scale = 0;
+                tiles.push(tile);
+                counter.textContent = tiles.length;
+                availablePositions.splice(randomIndex, 1);
+                animateTile(tile);
+            }
+        }
+
+        function animateTile(tile) {
+            function animate() {
+                if (tile.alpha < tile.targetAlpha) tile.alpha += 0.08;
+                if (tile.scale < 1) tile.scale += 0.1;
+                if (tile.alpha < tile.targetAlpha || tile.scale < 1) {
+                    requestAnimationFrame(animate);
+                }
+            }
+            animate();
+        }
+
+        function redrawTiles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            tiles.forEach(tile => {
+                ctx.save();
+                const centerX = tile.x + tile.size / 2;
+                const centerY = tile.y + tile.size / 2;
+                const scale = tile.scale || 1;
+                ctx.translate(centerX, centerY);
+                ctx.scale(scale, scale);
+                ctx.translate(-centerX, -centerY);
+                ctx.filter = 'blur(8px)';
+                ctx.globalAlpha = tile.alpha || tile.targetAlpha || 0.8;
+                ctx.fillStyle = tile.color;
+                ctx.fillRect(tile.x, tile.y, tile.size, tile.size);
+                ctx.filter = 'none';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(tile.x, tile.y, tile.size, tile.size);
+                ctx.restore();
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        function renderLoop() {
+            if (cameraReady) redrawTiles();
+            requestAnimationFrame(renderLoop);
+        }
+
+        button.addEventListener('click', () => {
+            addTile();
+            button.style.transform = 'scale(0.9)';
+            setTimeout(() => button.style.transform = 'scale(1)', 100);
+            if (navigator.vibrate) navigator.vibrate(50);
+        });
+
+        clearButton.addEventListener('click', () => {
+            if (confirm('모든 사람의 모자이크를 초기화하시겠습니까?')) {
+                if (isOnline && db) {
+                    db.ref('tiles').remove();
+                } else {
+                    tiles = [];
+                    counter.textContent = 0;
+                    initializePositions();
+                    redrawTiles();
+                }
+                if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+            }
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+        
+        // 초기화
+        resizeCanvas();
+        initCamera();
+        renderLoop();
+        findCorrectURL();
+    </script>
+</body>
+</html>
