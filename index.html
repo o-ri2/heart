@@ -350,16 +350,25 @@
         function startHostStream() {
             if (hostStreamInterval || !cameraReady || !db) return;
             const frameRef = db.ref('stream/frame');
+            
+            // 스트리밍 캔버스 크기 조정
+            streamCanvas.width = 640;  // 크기 축소
+            streamCanvas.height = 360; // 크기 축소
+            
             hostStreamInterval = setInterval(() => {
                 try {
-                    // 캔버스에 비디오를 그려서 base64로 업로드
                     streamCtx.drawImage(video, 0, 0, streamCanvas.width, streamCanvas.height);
-                    const dataUrl = streamCanvas.toDataURL('image/jpeg', 0.6);
-                    frameRef.set({ data: dataUrl, timestamp: Date.now() });
+                    const dataUrl = streamCanvas.toDataURL('image/jpeg', 0.5); // 품질 낮춤
+                    frameRef.set({ 
+                        data: dataUrl,
+                        timestamp: Date.now(),
+                        width: streamCanvas.width,
+                        height: streamCanvas.height
+                    });
                 } catch (e) {
                     console.warn('프레임 캡쳐 실패:', e);
                 }
-            }, 700); // 약 700ms 간격 (조절 가능)
+            }, 1000); // 주기 1초로 증가
         }
 
         function stopHostStream() {
@@ -477,19 +486,26 @@
             frameRef.on('value', snap => {
                 const val = snap.val();
                 if (val && val.data) {
-                    console.log('[frame] received ts=', val.timestamp || '');
-                    // 새 프레임 수신 시 로드 플래그 리셋 후 src 설정
-                    sharedImageReady = false;
-                    sharedImage.onload = () => {
+                    // 디버그 로그 추가
+                    console.log('[frame] 수신 시작');
+                    
+                    // 새 프레임 수신 시 이미지 로드
+                    const tempImage = new Image();
+                    tempImage.crossOrigin = 'anonymous';  // CORS 문제 해결
+                    
+                    tempImage.onload = () => {
+                        console.log('[frame] 이미지 로드 성공');
+                        sharedImage = tempImage;
                         sharedImageReady = true;
-                        // 첫 프레임이 도착하면 로딩 숨김
-                        if (loading && !loading.classList.contains('hidden')) loading.classList.add('hidden');
+                        loading.classList.add('hidden');
                     };
-                    sharedImage.onerror = (err) => {
+                    
+                    tempImage.onerror = (err) => {
+                        console.error('[frame] 이미지 로드 실패:', err);
                         sharedImageReady = false;
-                        console.warn('[frame] image load error', err);
                     };
-                    sharedImage.src = val.data;
+                    
+                    tempImage.src = val.data;
                 }
             });
 
@@ -570,23 +586,40 @@
         }
 
         function redrawTiles() {
-            // 배경: 호스트면 비디오, 아니면 sharedImage
             ctx.clearRect(0, 0, canvas.width, canvas.height);
- 
+            
+            // 배경 그리기
             if (isHostUser && cameraReady) {
                 try {
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                } catch (e) { /* 무시 */ }
+                    console.log('[render] 호스트 카메라 표시');
+                } catch (e) {
+                    console.error('[render] 호스트 카메라 에러:', e);
+                }
             } else if (sharedImage && sharedImageReady) {
                 try {
-                    ctx.drawImage(sharedImage, 0, 0, canvas.width, canvas.height);
-                } catch (e) { /* 무시 */ }
+                    // 화면 비율 유지하면서 채우기
+                    const scale = Math.max(
+                        canvas.width / sharedImage.width,
+                        canvas.height / sharedImage.height
+                    );
+                    
+                    const newWidth = sharedImage.width * scale;
+                    const newHeight = sharedImage.height * scale;
+                    
+                    const x = (canvas.width - newWidth) / 2;
+                    const y = (canvas.height - newHeight) / 2;
+                    
+                    ctx.drawImage(sharedImage, x, y, newWidth, newHeight);
+                    console.log('[render] 공유 화면 표시');
+                } catch (e) {
+                    console.error('[render] 공유 화면 에러:', e);
+                }
             } else {
-                // 검은 배경 표시
                 ctx.fillStyle = '#000';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
-
+            
             // 타일 렌더링 (위에 오버레이)
             tiles.forEach(tile => {
                 ctx.save();
@@ -636,6 +669,28 @@
         });
 
         window.addEventListener('resize', resizeCanvas);
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // 모바일 브라우저에서 디버그 로그 표시
+            if (!window.console || !console.log) {
+                const div = document.createElement('div');
+                div.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#fff;padding:10px;z-index:1000;font-size:12px;';
+                document.body.appendChild(div);
+                window.console = {
+                    log: (...args) => {
+                        div.textContent = args.join(' ');
+                    },
+                    error: (...args) => {
+                        div.textContent = '❌ ' + args.join(' ');
+                        div.style.color = '#ff4444';
+                    }
+                };
+            }
+            
+            // 캔버스 컨텍스트 설정 
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+        });
 
         // 초기화
         resizeCanvas();
